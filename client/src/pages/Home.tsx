@@ -35,8 +35,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useState } from "react";
+import { useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
+import ReCAPTCHA from "react-google-recaptcha";
+
+// API response type
+interface ContactApiResponse {
+  success: boolean;
+  message?: string;
+  error?: string;
+}
 
 // Animation variants
 const fadeInUp = {
@@ -62,14 +70,56 @@ export default function Home() {
     company: "",
     email: "",
     phone: "",
-    message: ""
+    message: "",
+    securityAnswer: ""
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [recaptchaToken, setRecaptchaToken] = useState<string | null>(null);
+  const recaptchaRef = useRef<ReCAPTCHA>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
-    toast.success("お問い合わせを受け付けました。担当者より2営業日以内にご連絡いたします。");
-    setFormData({ name: "", company: "", email: "", phone: "", message: "" });
-  };
+    
+    if (isSubmitting) return;
+
+    // Validate reCAPTCHA
+    if (!recaptchaToken) {
+      toast.error("reCAPTCHAの認証を完了してください。");
+      return;
+    }
+    
+    setIsSubmitting(true);
+    
+    try {
+      const response = await fetch("/api/contact", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ...formData, recaptchaToken }),
+      });
+
+      const data: ContactApiResponse = await response.json();
+
+      if (data.success) {
+        toast.success(data.message || "お問い合わせを受け付けました。担当者より2営業日以内にご連絡いたします。");
+        setFormData({ name: "", company: "", email: "", phone: "", message: "", securityAnswer: "" });
+        setRecaptchaToken(null);
+        recaptchaRef.current?.reset();
+      } else {
+        toast.error(data.error || "送信に失敗しました。しばらく経ってから再度お試しください。");
+        // Reset reCAPTCHA on error
+        setRecaptchaToken(null);
+        recaptchaRef.current?.reset();
+      }
+    } catch {
+      toast.error("通信エラーが発生しました。インターネット接続を確認してください。");
+      setRecaptchaToken(null);
+      recaptchaRef.current?.reset();
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [formData, isSubmitting, recaptchaToken]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -682,13 +732,41 @@ export default function Home() {
                       className="bg-background"
                     />
                   </div>
+                  <div className="bg-secondary/50 p-4 rounded-lg border border-border">
+                    <label className="block text-sm font-medium text-foreground mb-2">
+                      セキュリティ確認 <span className="text-destructive">*</span>
+                    </label>
+                    <p className="text-sm text-muted-foreground mb-3">
+                      スパム防止のため、以下の質問にお答えください。
+                    </p>
+                    <p className="text-sm font-medium text-foreground mb-2">
+                      日本で一番高い山は何ですか？（日本語で回答）
+                    </p>
+                    <Input 
+                      required
+                      value={formData.securityAnswer}
+                      onChange={(e) => setFormData({ ...formData, securityAnswer: e.target.value })}
+                      placeholder="回答を入力してください"
+                      className="bg-background"
+                    />
+                    <div className="mt-4">
+                      <ReCAPTCHA
+                        ref={recaptchaRef}
+                        sitekey={import.meta.env.VITE_RECAPTCHA_SITE_KEY || ""}
+                        onChange={(token) => setRecaptchaToken(token)}
+                        onExpired={() => setRecaptchaToken(null)}
+                        onError={() => setRecaptchaToken(null)}
+                      />
+                    </div>
+                  </div>
                   <Button 
                     type="submit" 
                     size="lg"
-                    className="w-full warm-glow bg-primary hover:bg-primary/90 text-primary-foreground"
+                    disabled={isSubmitting}
+                    className="w-full warm-glow bg-primary hover:bg-primary/90 text-primary-foreground disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    送信する
-                    <ArrowRight className="ml-2 w-5 h-5" />
+                    {isSubmitting ? "送信中..." : "送信する"}
+                    {!isSubmitting && <ArrowRight className="ml-2 w-5 h-5" />}
                   </Button>
                 </form>
               </CardContent>
